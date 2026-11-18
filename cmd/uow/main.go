@@ -29,6 +29,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -49,7 +50,7 @@ import (
 
 func main() {
 	informURL := flag.String("url", "http://192.168.1.1:8080/inform", "controller inform URL (IP literal host)")
-	console := flag.String("console", "192.168.1.1", "console host for read-only health checks")
+	console := flag.String("console", "", "console host: SSH adoption is accepted only from it, and the read-only health checks go to it (empty = the -url host)")
 	macStr := flag.String("mac", "02:6f:77:72:74:01", "device MAC: made-up (02:...) without -ap; with -ap it must equal the AP's br-lan MAC")
 	apAddr := flag.String("ap", "", "real OpenWrt AP to report (ssh host:port); empty = made-up device")
 	apUser := flag.String("ap-user", "root", "ssh user on the AP")
@@ -75,6 +76,11 @@ func main() {
 	sshListen := flag.String("ssh-listen", ":2222", "fake device SSH (adoption only); empty = off")
 	maxErrors := flag.Int("max-errors", 0, "stop after this many bad answers in a row (0 = never: keep trying, up to a minute apart)")
 	flag.Parse()
+	if *console == "" {
+		// the console is the controller the AP informs: a fixed default
+		// refused its SSH adoption on any other network
+		*console = consoleFromURL(*informURL)
+	}
 	if h, _, err := net.SplitHostPort(*apAddr); err == nil {
 		apHost = h
 	}
@@ -1299,4 +1305,13 @@ func minRSSIKick(ap *openwrt.Client, s *openwrt.Snapshot) {
 			delete(lowRSSI, m)
 		}
 	}
+}
+
+// consoleFromURL: the host of an inform URL (http://10.0.0.1:8080/inform ->
+// 10.0.0.1), or 192.168.1.1 when it has none.
+func consoleFromURL(informURL string) string {
+	if u, err := url.Parse(informURL); err == nil && u.Hostname() != "" {
+		return u.Hostname()
+	}
+	return "192.168.1.1"
 }
