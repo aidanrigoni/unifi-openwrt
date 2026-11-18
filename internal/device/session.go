@@ -167,11 +167,18 @@ func (x *Session) Payload(now time.Time) ([]byte, error) {
 		m["state"] = 4 // device-side "managed"; the controller does not read it
 		m["x_aes_gcm"] = x.S.GCM
 		m["bootrom_version"] = "unknown"
-		m["sys_stats"] = map[string]any{
-			"loadavg_1": "0.05", "loadavg_5": "0.04", "loadavg_15": "0.01",
-			"mem_total": 129130496, "mem_used": 64565248, "mem_buffer": 4194304,
+		// placeholders for a made-up device only: a real AP's own figures
+		// (Extra) must not be overwritten, or the controller sees fixed load
+		// and memory and "auto" channels
+		if _, ok := m["sys_stats"]; !ok {
+			m["sys_stats"] = map[string]any{
+				"loadavg_1": "0.05", "loadavg_5": "0.04", "loadavg_15": "0.01",
+				"mem_total": 129130496, "mem_used": 64565248, "mem_buffer": 4194304,
+			}
 		}
-		m["radio_table_stats"] = radioStats(d.Radios)
+		if _, ok := m["radio_table_stats"]; !ok {
+			m["radio_table_stats"] = radioStats(d.Radios)
+		}
 	}
 	return json.Marshal(m)
 }
