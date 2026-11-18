@@ -160,7 +160,8 @@ portal and RF scan.
   list. Install it from the package feed; check with `--simulate` before
   removing the basic one.
 - `hostapd-utils` (immediate block/unblock), `kmod-nft-bridge` (guest
-  isolation).
+  isolation), `rpcd-mod-iwinfo` (`ubus call iwinfo`: without it the AP
+  reports no WLANs or radio state; images with LuCI already have it).
 - Optional: `usteer` (band steering), `tc-tiny`, `kmod-sched-core`,
   `kmod-sched`, `kmod-ifb` (rate-limit shaping), `snmpd` (SNMP),
   `alsa-utils` (Locate beep), `lldpd` (LLDP neighbours).
