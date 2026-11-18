@@ -186,3 +186,31 @@ func TestRepeatedSetparamStopsHurrying(t *testing.T) {
 		t.Error("a new setparam must be answered right away")
 	}
 }
+
+// An adopted real AP's own sys_stats and radio_table_stats (Extra) are sent
+// as collected; the placeholders are only for a made-up device.
+func TestAdoptedKeepsRealStats(t *testing.T) {
+	x := newSession(t)
+	x.S.Adopted = true
+	js, _ := x.Payload(time.Now())
+	var m map[string]any
+	json.Unmarshal(js, &m)
+	if m["sys_stats"] == nil || m["radio_table_stats"] == nil {
+		t.Fatalf("made-up device lost its placeholders: %v %v", m["sys_stats"], m["radio_table_stats"])
+	}
+	x.Extra = func() map[string]any {
+		return map[string]any{
+			"sys_stats":         map[string]any{"loadavg_1": "1.50"},
+			"radio_table_stats": []map[string]any{{"name": "wifi1", "channel": 36}},
+		}
+	}
+	js, _ = x.Payload(time.Now())
+	m = nil
+	json.Unmarshal(js, &m)
+	if l := m["sys_stats"].(map[string]any)["loadavg_1"]; l != "1.50" {
+		t.Errorf("sys_stats overwritten: loadavg_1 %v", l)
+	}
+	if rs := m["radio_table_stats"].([]any); len(rs) != 1 || rs[0].(map[string]any)["channel"] != 36.0 {
+		t.Errorf("radio_table_stats overwritten: %v", rs)
+	}
+}

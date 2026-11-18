@@ -47,6 +47,8 @@ define Package/unifi-openwrt
   URL:=https://example.invalid/unifi-openwrt
   # Runtime needs (besides base: uci, ubus, jsonfilter, iw, nftables):
   #  hostapd-utils   hostapd_cli for the runtime client deny list
+  #  rpcd-mod-iwinfo ubus iwinfo: the AP's Wi-Fi interfaces (images without
+  #                  LuCI lack it; without it no WLAN or radio state is reported)
   #  kmod-nft-bridge per-client rate limits (nftables on the bridge)
   # A *full* hostapd/wpad (wpad-mbedtls, wpad-wolfssl, wpad-openssl, or the
   # hostapd-* equivalents) is recommended but deliberately not a dependency:
@@ -59,7 +61,7 @@ define Package/unifi-openwrt
   # iw and nftables are not listed because iw-full and nftables-json are
   # alternatives a Kconfig select cannot express; both come with default
   # images (tools/mkapk.sh lists them, apk resolves virtual names).
-  DEPENDS:=$(GO_ARCH_DEPENDS) +hostapd-utils +kmod-nft-bridge
+  DEPENDS:=$(GO_ARCH_DEPENDS) +hostapd-utils +kmod-nft-bridge +rpcd-mod-iwinfo
 endef
 
 define Package/unifi-openwrt/description
