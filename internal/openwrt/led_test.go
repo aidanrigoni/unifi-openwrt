@@ -72,6 +72,15 @@ func TestLEDScriptSingleColour(t *testing.T) {
 	if sc := ledScript(leds, LEDBlue); !strings.Contains(sc, "echo 255 > /sys/class/leds/green:power/brightness") {
 		t.Errorf("fallback:\n%s", sc)
 	}
+	// green + red power LEDs (D-Link DAP-2660): green alone, never orange
+	leds = statusLEDs(parseLEDs("green:power 1\nred:power 1\n"))
+	for _, s := range []LEDState{LEDBlue, LEDWhite} {
+		sc := ledScript(leds, s)
+		if !strings.Contains(sc, "echo 1 > /sys/class/leds/green:power/brightness") ||
+			!strings.Contains(sc, "echo 0 > /sys/class/leds/red:power/brightness") {
+			t.Errorf("green+red %v:\n%s", s, sc)
+		}
+	}
 }
 
 func TestRainbow(t *testing.T) {

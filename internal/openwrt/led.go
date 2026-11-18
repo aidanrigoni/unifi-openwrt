@@ -129,6 +129,11 @@ func channel(l LED, s LEDState, hasRGB, hasColor map[string]bool) (int, bool) {
 		return map[bool]int{true: 255}[l.Color == "blue"], false
 	case s.R == 0 && s.G == 0 && s.B == 0:
 		return 0, false
+	case hasColor["green"]:
+		// no LED of the wanted colour: show the state on green alone, as the
+		// stock firmware of such APs does (e.g. D-Link DAP-2660: green =
+		// normal, red = fault); lighting every LED would show red+green = orange
+		return map[bool]int{true: 255}[l.Color == "green"], false
 	}
 	return 255, false
 }
