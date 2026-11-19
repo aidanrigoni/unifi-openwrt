@@ -178,7 +178,7 @@ func (s *Snapshot) Fields(prev *Snapshot, info CfgInfo, caps map[string]RadioCap
 		}
 		cuTotal, cuRx, cuTx := 0, 0, 0
 		if prev != nil {
-			if pr := prev.radio(r.Phy); pr != nil {
+			if pr := prev.radio(r); pr != nil {
 				if d := r.Survey.Active - pr.Survey.Active; d > 0 {
 					cuTotal = pct(r.Survey.Busy-pr.Survey.Busy, d)
 					cuRx = pct(r.Survey.Rx-pr.Survey.Rx, d)
@@ -215,7 +215,7 @@ func (s *Snapshot) Fields(prev *Snapshot, info CfgInfo, caps map[string]RadioCap
 				// Its SSID is the vwire one, whose devname is the downlink VAP's.
 				vname = fmt.Sprintf("ath%d", nextAth-1)
 				m["uplink"] = vname
-				vaps = append(vaps, uplinkVAP(vname, name, r, v, s.ARP))
+				vaps = append(vaps, uplinkVAP(vname, name, r, v, s.neighbours()))
 				continue
 			}
 			guest := info.GuestVAP[vname]
@@ -318,12 +318,19 @@ func (s *Snapshot) Fields(prev *Snapshot, info CfgInfo, caps map[string]RadioCap
 	return m
 }
 
-func (s *Snapshot) radio(phy string) *Radio {
-	if phy == "" {
-		return nil // a wifi-device with no interface up
+// radio is the same radio in another snapshot: by wifi-device section when
+// it has one (a multi-radio wiphy has several radios on one phy), else by phy.
+func (s *Snapshot) radio(r Radio) *Radio {
+	for i := range s.Radios {
+		if r.Section != "" && s.Radios[i].Section == r.Section {
+			return &s.Radios[i]
+		}
+	}
+	if r.Section != "" || r.Phy == "" {
+		return nil // not there before, or a wifi-device with no interface up
 	}
 	for i := range s.Radios {
-		if s.Radios[i].Phy == phy {
+		if s.Radios[i].Phy == r.Phy {
 			return &s.Radios[i]
 		}
 	}
@@ -578,6 +585,22 @@ func uplinkVAP(vname, radioName string, r, v Radio, neigh map[string]string) map
 		row["up"], row["state"] = false, "INIT"
 	}
 	return row
+}
+
+// neighbours: the MACs the AP knows on its LAN, from the ARP table and from
+// the br-lan forwarding database. A mesh child never talks IP to its parent
+// AP, so the parent's own MAC is often only in the forwarding database.
+func (s *Snapshot) neighbours() map[string]string {
+	out := make(map[string]string, len(s.ARP)+len(s.FDB))
+	for _, e := range s.FDB {
+		if !e.Local {
+			out[strings.ToLower(e.MAC)] = ""
+		}
+	}
+	for mac, ip := range s.ARP {
+		out[strings.ToLower(mac)] = ip
+	}
+	return out
 }
 
 // parentDevice finds the parent AP's own MAC among the neighbours: UniFi VAP

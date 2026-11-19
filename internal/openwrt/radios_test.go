@@ -64,6 +64,51 @@ func TestRadiosFromWirelessStatus(t *testing.T) {
 	}
 }
 
+// One wiphy for three bands (ath12k multi-radio, e.g. TP-Link Archer BE800 on
+// ipq95xx): every interface is on phy "wl0", but each wifi-device is its own
+// radio. Grouping by phy alone reported one radio once WLANs were up.
+func TestRadiosMultiRadioWiphy(t *testing.T) {
+	out := `=== board
+{"hostname":"ap","model":"m","release":{"description":"OpenWrt"}}
+=== iface wl0.0-ap0 wl0
+{"ssid":"x","bssid":"02:00:00:00:00:00","mode":"Master","channel":33,"frequency":6115}
+=== assoc wl0.0-ap0
+{"results":[]}
+=== iface wl0.0-ap1 wl0
+{"ssid":"e","bssid":"02:00:00:00:00:10","mode":"Master","channel":33,"frequency":6115}
+=== assoc wl0.0-ap1
+{"results":[]}
+=== iface wl0.1-ap0 wl0
+{"ssid":"x","bssid":"02:00:00:00:00:01","mode":"Master","channel":36,"frequency":5180}
+=== assoc wl0.1-ap0
+{"results":[]}
+=== iface wl0.2-ap0 wl0
+{"ssid":"x","bssid":"02:00:00:00:00:02","mode":"Master","channel":3,"frequency":2422}
+=== assoc wl0.2-ap0
+{"results":[]}
+=== wstatus
+{"radio0":{"up":true,"disabled":false,"config":{"band":"6g","channel":"auto","htmode":"EHT40"},"interfaces":[{"ifname":"wl0.0-ap0"},{"ifname":"wl0.0-ap1"}]},
+ "radio1":{"up":true,"disabled":false,"config":{"band":"5g","channel":"36","htmode":"EHT40"},"interfaces":[{"ifname":"wl0.1-ap0"}]},
+ "radio2":{"up":true,"disabled":false,"config":{"band":"2g","channel":"auto","htmode":"EHT20"},"interfaces":[{"ifname":"wl0.2-ap0"}]}}
+`
+	s, err := Parse([]byte(out), time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(s.Radios) != 3 {
+		t.Fatalf("got %d radios, want 3: %+v", len(s.Radios), s.Radios)
+	}
+	want := map[string]string{"wifi0": "radio2", "wifi1": "radio1", "wifi2": "radio0"}
+	if got := s.RadioSections(); !reflect.DeepEqual(got, want) {
+		t.Errorf("sections = %v, want %v", got, want)
+	}
+	for _, r := range s.Radios {
+		if r.Section == "radio0" && len(r.VAPs) != 2 {
+			t.Errorf("6 GHz radio has %d VAPs, want 2", len(r.VAPs))
+		}
+	}
+}
+
 // Without the status (older OpenWrt, ubus error) radios stay as iwinfo has them.
 func TestRadiosWithoutWirelessStatus(t *testing.T) {
 	r := withDevices([]Radio{{Phy: "phy0", Band: "na"}, {Phy: "phy1"}}, nil)
@@ -96,5 +141,27 @@ func TestHT160(t *testing.T) {
 	}
 	if got["na"] != true || got["ng"] != nil {
 		t.Errorf("has_ht160 by band = %v, want na only", got)
+	}
+}
+
+// Channel use is the change of a radio's own survey counters. On a
+// multi-radio wiphy the radios share one phy, so the earlier snapshot's radio
+// is found by wifi-device, not by phy.
+func TestChannelUseMultiRadioWiphy(t *testing.T) {
+	snap := func(a2, b2, a5, b5 int64) *Snapshot {
+		return &Snapshot{Radios: []Radio{
+			{Phy: "wl0", Section: "radio2", Band: "ng", Channel: 3, Survey: Survey{Active: a2, Busy: b2}},
+			{Phy: "wl0", Section: "radio1", Band: "na", Channel: 36, Survey: Survey{Active: a5, Busy: b5}},
+		}}
+	}
+	prev, cur := snap(1000, 100, 50000, 40000), snap(2000, 200, 51000, 40500)
+	rt := cur.Fields(prev, CfgInfo{}, nil)["radio_table"].([]map[string]any)
+	if len(rt) != 2 {
+		t.Fatalf("radio_table = %v", rt)
+	}
+	for i, want := range []int{10, 50} {
+		if got := rt[i]["athstats"].(map[string]any)["cu_total"]; got != want {
+			t.Errorf("radio %d (%v): cu_total = %v, want %d", i, rt[i]["radio"], got, want)
+		}
 	}
 }
