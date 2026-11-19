@@ -289,10 +289,10 @@ func TestCountryCode(t *testing.T) {
 	}
 }
 
-// A security type that is not built (WPA-Enterprise, OWE) must never come up
-// as WPA2-PSK: an existing interface is switched off, a new one is not made.
+// A security type that is not built (OWE, WPA3-Enterprise 192-bit) must never
+// come up as WPA2-PSK: an existing interface is switched off, a new one is not made.
 func TestUnsupportedSecurityStaysOff(t *testing.T) {
-	for _, mgmt := range []string{"WPA-EAP", "OWE", "WPA-EAP-SUITE-B-192"} {
+	for _, mgmt := range []string{"OWE", "WPA-EAP-SUITE-B-192"} {
 		c := strings.Replace(cfg, "aaa.1.wpa.key.1.mgmt=SAE", "aaa.1.wpa.key.1.mgmt="+mgmt, 1) +
 			"aaa.4.ssid=corp\naaa.4.wpa=2\naaa.4.wpa.key.1.mgmt=" + mgmt + "\nwireless.4.ssid=corp\nwireless.4.parent=wifi1\nwireless.4.usage=user\n"
 		r := Plan(ParseCfg(c), ParseUCI(cur), Features{})
@@ -329,5 +329,85 @@ func TestUnsupportedSecurityStaysOff(t *testing.T) {
 	// no key mgmt listed but a passphrase: still WPA2-PSK, as before
 	if enc, _ := encryption(Cfg{"aaa.1.wpa": "2", "aaa.1.wpa.psk": "x"}, "aaa.1."); enc != "psk2+ccmp" {
 		t.Errorf("no mgmt: %q", enc)
+	}
+}
+
+// WPA-Enterprise: the key mgmt and wpa3 flags pick WPA2, WPA3 or the mix.
+func TestEnterpriseEncryption(t *testing.T) {
+	for _, c := range []struct {
+		cfg  Cfg
+		want string
+	}{
+		{Cfg{"aaa.1.wpa": "2", "aaa.1.wpa.key.1.mgmt": "WPA-EAP"}, "wpa2+ccmp"},
+		{Cfg{"aaa.1.wpa": "2", "aaa.1.wpa.key.1.mgmt": "WPA-EAP-SHA256"}, "wpa3"},
+		{Cfg{"aaa.1.wpa": "2", "aaa.1.wpa.key.1.mgmt": "WPA-EAP", "aaa.1.wpa3.support": "enabled"}, "wpa3"},
+		{Cfg{"aaa.1.wpa": "2", "aaa.1.wpa.key.1.mgmt": "WPA-EAP-SHA256", "aaa.1.wpa3.transition": "enabled"}, "wpa3-mixed"},
+		{Cfg{"aaa.1.wpa": "2", "aaa.1.wpa.key.1.mgmt": "WPA-EAP WPA-EAP-SHA256"}, "wpa3-mixed"},
+		{Cfg{"aaa.1.wpa": "2", "aaa.1.wpa.key.1.mgmt": "WPA-EAP-SUITE-B-192"}, ""},
+	} {
+		if enc, _ := encryption(c.cfg, "aaa.1."); enc != c.want {
+			t.Errorf("%v: %q, want %q", c.cfg, enc, c.want)
+		}
+	}
+	for enc, want := range map[string]string{"wpa2+ccmp": "WPA-EAP", "wpa3": "WPA-EAP-SHA256", "wpa3-mixed": "WPA-EAP WPA-EAP-SHA256"} {
+		if km := keyMgmt(Cfg{}, "aaa.1.", enc, false); km != want {
+			t.Errorf("keyMgmt(%s) = %q, want %q", enc, km, want)
+		}
+	}
+	if km := keyMgmt(Cfg{}, "aaa.1.", "wpa2+ccmp", true); km != "WPA-EAP FT-EAP" {
+		t.Errorf("keyMgmt with 802.11r = %q", km)
+	}
+}
+
+// An enterprise WLAN gets its RADIUS servers (secrets masked), PMF, no
+// passphrase in "key", and loses them all again when it goes back to PSK.
+func TestEnterprisePlan(t *testing.T) {
+	ent := strings.NewReplacer(
+		"aaa.1.wpa.key.1.mgmt=SAE", "aaa.1.wpa.key.1.mgmt=WPA-EAP-SHA256",
+		"aaa.1.wpa3.transition=enabled", "aaa.1.wpa3.transition=disabled",
+		"aaa.1.wpa.psk=s3cret-pass", "aaa.1.radius.auth.1.ip=10.0.0.1\naaa.1.radius.auth.1.port=1812\naaa.1.radius.auth.1.secret=rad-secret-1\n"+
+			"aaa.1.radius.acct.1.ip=10.0.0.1\naaa.1.radius.acct.1.port=1813\naaa.1.radius.acct.1.secret=rad-secret-2\naaa.1.auth_cache=enabled\naaa.1.dynamic_vlan=1",
+	).Replace(cfg)
+	r := Plan(ParseCfg(ent), ParseUCI(cur), Features{})
+	got := map[string]Op{}
+	for _, op := range r.Ops {
+		if strings.HasPrefix(op.Key, "wireless.ap0.") {
+			got[strings.TrimPrefix(op.Key, "wireless.ap0.")] = op
+		}
+		if strings.Contains(op.String(), "rad-secret") || strings.Contains(op.String(), "s3cret") {
+			t.Errorf("secret leaked: %s", op)
+		}
+	}
+	for opt, want := range map[string]string{"encryption": "wpa3", "ieee80211w": "2", "auth_server": "10.0.0.1", "auth_port": "1812",
+		"auth_secret": "rad-secret-1", "acct_server": "10.0.0.1", "acct_port": "1813", "acct_secret": "rad-secret-2", "auth_cache": "1"} {
+		if got[opt].Value != want {
+			t.Errorf("%s = %q, want %q", opt, got[opt].Value, want)
+		}
+	}
+	if !got["auth_secret"].Secret || !got["acct_secret"].Secret {
+		t.Error("RADIUS secrets not marked secret")
+	}
+	if op, ok := got["key"]; !ok || !op.Del {
+		t.Errorf("passphrase not removed from key: %+v", op)
+	}
+	if !strings.Contains(strings.Join(r.Notes, "\n"), "RADIUS-assigned VLANs are not applied") {
+		t.Errorf("no dynamic VLAN note: %q", r.Notes)
+	}
+	// back to WPA2/WPA3-Personal: the RADIUS options go, the passphrase returns
+	was := ParseUCI(cur + "wireless.ap0.auth_server='10.0.0.1'\nwireless.ap0.auth_secret='rad-secret-1'\nwireless.ap0.auth_port='1812'\n")
+	r = Plan(ParseCfg(cfg), was, Features{})
+	del := map[string]bool{}
+	for _, op := range r.Ops {
+		if op.Del {
+			del[op.Key] = true
+		}
+		if strings.Contains(op.String(), "rad-secret") {
+			t.Errorf("secret leaked: %s", op)
+		}
+	}
+	for _, opt := range []string{"auth_server", "auth_secret", "auth_port"} {
+		if !del["wireless.ap0."+opt] {
+			t.Errorf("%s not removed when going back to PSK", opt)
+		}
 	}
 }

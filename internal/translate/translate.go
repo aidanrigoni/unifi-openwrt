@@ -244,6 +244,12 @@ func Plan(cfg Cfg, cur UCI, f Features) Result {
 		}
 		if enc != "none" {
 			want["ieee80211w"] = pmf(cfg[a+"pmf.status"], cfg[a+"pmf.mode"])
+			// WPA3-Enterprise requires PMF (the WPA2/WPA3 mix at least optional)
+			if enc == "wpa3" {
+				want["ieee80211w"] = "2"
+			} else if enc == "wpa3-mixed" && want["ieee80211w"] == "0" {
+				want["ieee80211w"] = "1"
+			}
 		}
 		for _, x := range []struct {
 			opt, what string
@@ -312,11 +318,19 @@ func Plan(cfg Cfg, cur UCI, f Features) Result {
 				r.Ops = append(r.Ops, Op{Key: k + "hostapd_bss_options", List: bssOpts, Old: cur[k+"hostapd_bss_options"]})
 			}
 		}
-		if psk := cfg[a+"wpa.psk"]; psk != "" && enc != "none" {
+		if enterprise(enc) {
+			// OpenWrt reads "key" as the RADIUS secret when auth_secret is
+			// unset: an enterprise WLAN must not keep a passphrase there
+			if old, has := cur[k+"key"]; has {
+				r.Ops = append(r.Ops, Op{Del: true, Key: k + "key", Old: old, Secret: true})
+			}
+			r.Ops = append(r.Ops, diff(k, map[string]string{"auth_cache": boolStr(cfg[a+"auth_cache"] == "enabled")}, cur, nil)...)
+		} else if psk := cfg[a+"wpa.psk"]; psk != "" && enc != "none" {
 			if cur[k+"key"] != psk {
 				r.Ops = append(r.Ops, Op{Key: k + "key", Value: psk, Old: cur[k+"key"], Secret: true})
 			}
 		}
+		r.Ops = append(r.Ops, radiusOps(cfg, a, k, enc, cur, &r)...)
 	}
 	r.Ops = append(r.Ops, radioRateOps(radioRates, cur, &r)...)
 	r.Ops = append(r.Ops, planStamgr(cfg, cur, &r)...)
@@ -515,7 +529,23 @@ func encryption(cfg Cfg, a string) (string, string) {
 	if sae && cfg[a+"wpa3.transition"] == "enabled" {
 		psk = true
 	}
+	// WPA-Enterprise (802.1X, RADIUS): WPA2 is WPA-EAP; WPA3 is WPA-EAP-SHA256
+	// (PMF required), or WPA-EAP with wpa3.support; transition mode is both.
+	listedEAP, listed256 := has("WPA-EAP") || has("FT-EAP"), has("WPA-EAP-SHA256")
+	w3 := cfg[a+"wpa3.support"] == "enabled"
+	eap3 := listed256 || (listedEAP && w3)
+	eap := (listedEAP && !w3) || (listedEAP && listed256) || (eap3 && cfg[a+"wpa3.transition"] == "enabled")
 	switch {
+	case has("WPA-EAP-SUITE-B-192"):
+		// WPA3-Enterprise 192-bit needs GCMP-256 and BIP-GMAC-256, which
+		// many radios (ath9k, ath10k QCA988x) lack: never fall back to less
+		return "", fmt.Sprintf("key mgmt %v is not supported (WPA3-Enterprise 192-bit needs GCMP-256)", mgmt)
+	case eap3 && eap:
+		return "wpa3-mixed", ""
+	case eap3:
+		return "wpa3", ""
+	case eap:
+		return "wpa2+ccmp", ""
 	case sae && psk:
 		return "sae-mixed", ""
 	case sae:
@@ -525,9 +555,60 @@ func encryption(cfg Cfg, a string) (string, string) {
 	case len(mgmt) == 0:
 		return "psk2+ccmp", "no key mgmt listed, assumed WPA2-PSK"
 	default:
-		// WPA-Enterprise (WPA-EAP), OWE and anything else not built here.
-		return "", fmt.Sprintf("key mgmt %v is not supported (only WPA2/WPA3 personal)", mgmt)
+		// OWE and anything else not built here.
+		return "", fmt.Sprintf("key mgmt %v is not supported (only WPA2/WPA3 personal and enterprise)", mgmt)
 	}
+}
+
+// enterprise: an OpenWrt encryption value that uses 802.1X/RADIUS.
+func enterprise(enc string) bool {
+	return enc == "wpa2+ccmp" || enc == "wpa3" || enc == "wpa3-mixed"
+}
+
+// radiusOps: the RADIUS servers of an enterprise WLAN (aaa.N.radius.auth.1
+// and .acct.1: OpenWrt takes one of each), secrets masked; for any other
+// WLAN, removes RADIUS options left over from an earlier enterprise setup.
+func radiusOps(cfg Cfg, a, k, enc string, cur UCI, r *Result) []Op {
+	var ops []Op
+	set := func(opt, v string, secret bool) {
+		if old, has := cur[k+opt]; v == "" {
+			if has {
+				ops = append(ops, Op{Del: true, Key: k + opt, Old: old, Secret: secret})
+			}
+		} else if old != v {
+			ops = append(ops, Op{Key: k + opt, Value: v, Old: old, Secret: secret})
+		}
+	}
+	srv := func(kind string) (ip, port, secret string) {
+		if !enterprise(enc) {
+			return "", "", ""
+		}
+		p := a + "radius." + kind + ".1."
+		if cfg[p+"ip"] == "" {
+			return "", "", ""
+		}
+		return cfg[p+"ip"], cfg[p+"port"], cfg[p+"secret"]
+	}
+	ip, port, secret := srv("auth")
+	set("auth_server", ip, false)
+	set("auth_port", port, false)
+	set("auth_secret", secret, true)
+	ip, port, secret = srv("acct")
+	set("acct_server", ip, false)
+	set("acct_port", port, false)
+	set("acct_secret", secret, true)
+	if enterprise(enc) {
+		if cfg[a+"radius.auth.1.ip"] == "" {
+			r.Notes = append(r.Notes, fmt.Sprintf("%s: enterprise WLAN without a RADIUS server in the config", strings.TrimSuffix(k, ".")))
+		}
+		if cfg[a+"radius.auth.2.ip"] != "" || cfg[a+"radius.acct.2.ip"] != "" {
+			r.Notes = append(r.Notes, fmt.Sprintf("%s: only the first RADIUS server is used", strings.TrimSuffix(k, ".")))
+		}
+		if v := cfg[a+"dynamic_vlan"]; v != "" && v != "0" && v != "disabled" {
+			r.Notes = append(r.Notes, fmt.Sprintf("%s: RADIUS-assigned VLANs are not applied: clients stay on the WLAN's network", strings.TrimSuffix(k, ".")))
+		}
+	}
+	return ops
 }
 
 // keyMgmt: hostapd's wpa_key_mgmt for a WPA network, built like a UAP does
@@ -537,6 +618,15 @@ func encryption(cfg Cfg, a string) (string, string) {
 func keyMgmt(cfg Cfg, a, enc string, ft bool) string {
 	if enc == "none" {
 		return ""
+	}
+	if enterprise(enc) {
+		// what a UAP advertises: WPA-EAP for WPA2, WPA-EAP-SHA256 for WPA3,
+		// both in transition mode; FT-EAP with 802.11r
+		km := map[string]string{"wpa2+ccmp": "WPA-EAP", "wpa3": "WPA-EAP-SHA256", "wpa3-mixed": "WPA-EAP WPA-EAP-SHA256"}[enc]
+		if ft && enc != "wpa3" {
+			km += " FT-EAP"
+		}
+		return km
 	}
 	var mgmt []string
 	for i := 1; i <= 4; i++ {
