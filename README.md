@@ -128,7 +128,8 @@ Tested live on the OnHub unless marked otherwise (see [Tested devices](#tested-d
 | Indoor / Outdoor | <img src="docs/images/yes.svg" alt="✓" width="16" height="16"> works (Country IE environment) |
 | Minimum RSSI, load balancing (max clients) | <img src="docs/images/yes.svg" alt="✓" width="16" height="16"> works |
 | WLANs: SSID, password, WPA2, WPA3, WPA2/WPA3, PMF, hidden, client isolation, U-APSD, DTIM | <img src="docs/images/yes.svg" alt="✓" width="16" height="16"> works (WPA3-only untested live) |
-| WPA-Enterprise (RADIUS), Enhanced Open (OWE), WEP, private pre-shared keys | <img src="docs/images/no.svg" alt="✕" width="16" height="16"> not built: such a WLAN is left off, never opened with other security |
+| WPA-Enterprise (RADIUS): WPA2, WPA3, WPA2/WPA3 | <img src="docs/images/partial.svg" alt="△" width="16" height="16"> the WLAN's first RADIUS authentication and accounting servers, PMF, PMKSA caching; needs the full `wpad`. RADIUS-assigned VLANs are not applied (clients stay on the WLAN's network) |
+| WPA3-Enterprise 192-bit, Enhanced Open (OWE), WEP, private pre-shared keys | <img src="docs/images/no.svg" alt="✕" width="16" height="16"> not built: such a WLAN is left off, never opened with other security |
 | MAC filter (allow / deny) | <img src="docs/images/yes.svg" alt="✓" width="16" height="16"> works |
 | 802.11k, 802.11v | <img src="docs/images/yes.svg" alt="✓" width="16" height="16"> works; needs the full `wpad`. The neighbour list is built from the AP's own scans: its own other-band BSSes and the same SSID on other APs of the LAN, genuine UniFi APs included |
 | 802.11r (fast transition) | <img src="docs/images/partial.svg" alt="△" width="16" height="16"> switched on with OpenWrt's defaults, **untested live**. No key exchange with genuine UniFi APs, so a client moving between the two does a normal reconnect ([rrb-unifi](https://github.com/d-malinowski/unifi-openwrt-roaming) adds that exchange) |
