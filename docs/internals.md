@@ -712,11 +712,30 @@ port list.
 - The WLAN's wifi-ifaces get `network uow<vid>`.
 - `uow*` sections are deleted again when the VLAN goes away.
 
+### RADIUS-assigned VLANs
+
+An enterprise WLAN with "RADIUS assigned VLAN" on carries
+`aaa.N.dynamic_vlan=1` (`2`: a client without a VLAN in the answer is
+refused). system_cfg sends no bridge for these VLANs: a UAP's hostapd makes
+them when a client joins. uow lets OpenWrt's hostapd do the same, with
+options on the wifi-iface:
+
+- `dynamic_vlan` (1 or 2), `vlan_tagged_interface <first br-lan port>`,
+  `vlan_bridge br-uow`, `vlan_naming 1`.
+- For a client the RADIUS server puts on VLAN `<vid>` (Tunnel-Private-Group-ID),
+  hostapd creates a station interface `<ifname>.<vid>`, the 802.1Q device
+  `<port>.<vid>` and the bridge `br-uow<vid>`, or joins the ones uow already
+  made for a WLAN on that VLAN. A client with no VLAN stays on the WLAN's
+  network.
+- The options go again when the setting is off or the WLAN is no longer
+  enterprise. Without a br-lan port the setting is noted and not applied.
+- A VLAN ID the network sends untagged (the native VLAN, usually 1) would be
+  tagged: leave the VLAN out of the RADIUS answer for those clients.
+
 ### Not built
 
 - VLAN on the mesh uplink (`vwireap<N>.<vid>`).
 - VLAN on a secondary cable port (`eth1.<vid>`).
-- Per-client VLANs from RADIUS.
 
 ## Guest WLANs and the guest portal
 

@@ -56,19 +56,41 @@ func vlanNetworks(cfg Cfg) (map[string]string, []string) {
 	return netOf, ids
 }
 
-// planVLAN creates or removes the per-VLAN bridge and interface.
-func planVLAN(cfg Cfg, cur UCI, r *Result) []Op {
-	_, ids := vlanNetworks(cfg)
-	// the cable port: the first port of br-lan
-	port := ""
+// lanPort: the cable port, the first port of br-lan ("" = none found).
+func lanPort(cur UCI) string {
 	for k, v := range cur {
 		if strings.HasPrefix(k, "network.") && strings.HasSuffix(k, ".name") && v == "br-lan" {
-			f := strings.Fields(strings.ReplaceAll(cur[strings.TrimSuffix(k, ".name")+".ports"], "'", ""))
-			if len(f) > 0 {
-				port = f[0]
+			if f := strings.Fields(strings.ReplaceAll(cur[strings.TrimSuffix(k, ".name")+".ports"], "'", "")); len(f) > 0 {
+				return f[0]
 			}
 		}
 	}
+	return ""
+}
+
+// RADIUS-assigned VLANs (aaa.N.dynamic_vlan, 1 = optional, 2 = required):
+// hostapd itself makes a per-VLAN station interface for each client the
+// RADIUS server puts on a VLAN (Tunnel-Private-Group-ID), the 802.1Q device
+// <cable port>.<vid> and a bridge br-uow<vid>: the same names planVLAN uses,
+// so a VLAN that also has a WLAN on this AP shares its bridge. A client with
+// no VLAN in the answer stays on the WLAN's network (with 1).
+const radiusVLANBridge = "br-uow"
+
+// dynamicVLAN: hostapd's dynamic_vlan for the controller's value ("" = off).
+func dynamicVLAN(v string) string {
+	switch v {
+	case "1", "enabled", "optional":
+		return "1"
+	case "2", "required":
+		return "2"
+	}
+	return ""
+}
+
+// planVLAN creates or removes the per-VLAN bridge and interface.
+func planVLAN(cfg Cfg, cur UCI, r *Result) []Op {
+	_, ids := vlanNetworks(cfg)
+	port := lanPort(cur)
 	var ops []Op
 	want := map[string]bool{}
 	for _, id := range ids {
