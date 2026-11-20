@@ -597,6 +597,20 @@ func radiusOps(cfg Cfg, a, k, enc string, cur UCI, r *Result) []Op {
 	set("acct_server", ip, false)
 	set("acct_port", port, false)
 	set("acct_secret", secret, true)
+	// RADIUS-assigned VLANs (vlan.go)
+	dyn, port := "", ""
+	if enterprise(enc) {
+		if dyn = dynamicVLAN(cfg[a+"dynamic_vlan"]); dyn != "" {
+			if port = lanPort(cur); port == "" {
+				r.Notes = append(r.Notes, fmt.Sprintf("%s: RADIUS-assigned VLANs: no br-lan port found in the network config: not applied", strings.TrimSuffix(k, ".")))
+				dyn = ""
+			}
+		}
+	}
+	set("dynamic_vlan", dyn, false)
+	set("vlan_tagged_interface", port, false)
+	set("vlan_bridge", map[bool]string{true: radiusVLANBridge}[dyn != ""], false)
+	set("vlan_naming", map[bool]string{true: "1"}[dyn != ""], false)
 	if enterprise(enc) {
 		if cfg[a+"radius.auth.1.ip"] == "" {
 			r.Notes = append(r.Notes, fmt.Sprintf("%s: enterprise WLAN without a RADIUS server in the config", strings.TrimSuffix(k, ".")))
@@ -604,8 +618,8 @@ func radiusOps(cfg Cfg, a, k, enc string, cur UCI, r *Result) []Op {
 		if cfg[a+"radius.auth.2.ip"] != "" || cfg[a+"radius.acct.2.ip"] != "" {
 			r.Notes = append(r.Notes, fmt.Sprintf("%s: only the first RADIUS server is used", strings.TrimSuffix(k, ".")))
 		}
-		if v := cfg[a+"dynamic_vlan"]; v != "" && v != "0" && v != "disabled" {
-			r.Notes = append(r.Notes, fmt.Sprintf("%s: RADIUS-assigned VLANs are not applied: clients stay on the WLAN's network", strings.TrimSuffix(k, ".")))
+		if dyn != "" {
+			r.Notes = append(r.Notes, fmt.Sprintf("%s: RADIUS-assigned VLANs on %s.<vid>, bridge %s<vid>", strings.TrimSuffix(k, "."), port, radiusVLANBridge))
 		}
 	}
 	return ops

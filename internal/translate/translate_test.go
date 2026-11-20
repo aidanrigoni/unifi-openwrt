@@ -368,7 +368,8 @@ func TestEnterprisePlan(t *testing.T) {
 		"aaa.1.wpa.psk=s3cret-pass", "aaa.1.radius.auth.1.ip=10.0.0.1\naaa.1.radius.auth.1.port=1812\naaa.1.radius.auth.1.secret=rad-secret-1\n"+
 			"aaa.1.radius.acct.1.ip=10.0.0.1\naaa.1.radius.acct.1.port=1813\naaa.1.radius.acct.1.secret=rad-secret-2\naaa.1.auth_cache=enabled\naaa.1.dynamic_vlan=1",
 	).Replace(cfg)
-	r := Plan(ParseCfg(ent), ParseUCI(cur), Features{})
+	lan := "network.@device[0]=device\nnetwork.@device[0].name='br-lan'\nnetwork.@device[0].ports='eth0'\n"
+	r := Plan(ParseCfg(ent), ParseUCI(cur+lan), Features{})
 	got := map[string]Op{}
 	for _, op := range r.Ops {
 		if strings.HasPrefix(op.Key, "wireless.ap0.") {
@@ -379,7 +380,8 @@ func TestEnterprisePlan(t *testing.T) {
 		}
 	}
 	for opt, want := range map[string]string{"encryption": "wpa3", "ieee80211w": "2", "auth_server": "10.0.0.1", "auth_port": "1812",
-		"auth_secret": "rad-secret-1", "acct_server": "10.0.0.1", "acct_port": "1813", "acct_secret": "rad-secret-2", "auth_cache": "1"} {
+		"auth_secret": "rad-secret-1", "acct_server": "10.0.0.1", "acct_port": "1813", "acct_secret": "rad-secret-2", "auth_cache": "1",
+		"dynamic_vlan": "1", "vlan_tagged_interface": "eth0", "vlan_bridge": "br-uow", "vlan_naming": "1"} {
 		if got[opt].Value != want {
 			t.Errorf("%s = %q, want %q", opt, got[opt].Value, want)
 		}
@@ -390,8 +392,33 @@ func TestEnterprisePlan(t *testing.T) {
 	if op, ok := got["key"]; !ok || !op.Del {
 		t.Errorf("passphrase not removed from key: %+v", op)
 	}
-	if !strings.Contains(strings.Join(r.Notes, "\n"), "RADIUS-assigned VLANs are not applied") {
+	if !strings.Contains(strings.Join(r.Notes, "\n"), "RADIUS-assigned VLANs on eth0.<vid>, bridge br-uow<vid>") {
 		t.Errorf("no dynamic VLAN note: %q", r.Notes)
+	}
+	// no cable port known: no VLAN options, a note instead
+	r = Plan(ParseCfg(ent), ParseUCI(cur), Features{})
+	for _, op := range r.Ops {
+		if strings.HasPrefix(op.Key, "wireless.ap0.vlan_") || op.Key == "wireless.ap0.dynamic_vlan" {
+			t.Errorf("VLAN option without a cable port: %s", op)
+		}
+	}
+	if !strings.Contains(strings.Join(r.Notes, "\n"), "no br-lan port found") {
+		t.Errorf("no missing-port note: %q", r.Notes)
+	}
+	// dynamic VLAN switched off: the options go
+	off := strings.Replace(ent, "aaa.1.dynamic_vlan=1", "aaa.1.dynamic_vlan=0", 1)
+	had := cur + lan + "wireless.ap0.dynamic_vlan='1'\nwireless.ap0.vlan_tagged_interface='eth0'\nwireless.ap0.vlan_bridge='br-uow'\nwireless.ap0.vlan_naming='1'\n"
+	r = Plan(ParseCfg(off), ParseUCI(had), Features{})
+	gone := map[string]bool{}
+	for _, op := range r.Ops {
+		if op.Del {
+			gone[strings.TrimPrefix(op.Key, "wireless.ap0.")] = true
+		}
+	}
+	for _, opt := range []string{"dynamic_vlan", "vlan_tagged_interface", "vlan_bridge", "vlan_naming"} {
+		if !gone[opt] {
+			t.Errorf("%s not removed with dynamic VLAN off", opt)
+		}
 	}
 	// back to WPA2/WPA3-Personal: the RADIUS options go, the passphrase returns
 	was := ParseUCI(cur + "wireless.ap0.auth_server='10.0.0.1'\nwireless.ap0.auth_secret='rad-secret-1'\nwireless.ap0.auth_port='1812'\n")
